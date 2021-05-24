@@ -34,6 +34,9 @@ def make_permutations():
     for _list in list(perm):
         search_term = "from " + _list[0] + " to " + _list[1]
         results.append(search_term)
+
+    # Hard code in a 'to Opened'.  This is the starting state.
+    results.append('to Opened')
     return results
 
 
