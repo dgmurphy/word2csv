@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# do not check files in
+./src/files
+
 #
 .iml
 .idea/
