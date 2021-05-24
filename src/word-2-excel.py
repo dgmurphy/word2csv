@@ -2,6 +2,20 @@ import docx2txt
 from convert_am_pm import convert24
 from datetime import datetime
 
+
+#
+# Create a simple .csv file
+#
+def create_excel_file(filename, sortedArray):
+    import csv
+
+    with open('./files/test.csv', mode='w') as _file:
+        _writer = csv.writer(_file, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+        _writer.writerow(['Status', 'Effective Time'])
+
+        for _cell in sortedArray:
+            _writer.writerow([_cell[1],_cell[2]])
+
 #
 # Make a list of all possible 2 combo keywords
 #
@@ -25,7 +39,7 @@ def make_permutations():
 def find_clause_index(_filename, substring, start):
     nlf = '\n'
     my_text = docx2txt.process(_filename)
-    _idx = my_text.find(substring,start)
+    _idx = my_text.find(substring, start)
     result = ""
 
     # We found a clause
@@ -59,6 +73,7 @@ if __name__ == "__main__":
 
     filename = "./files/42-SEYM-200728-0002_2021-18-05_09-58-AM.docx"
     final_list = []
+    date_list = []
 
     for perm in perms:
         not_eof = True
@@ -68,7 +83,7 @@ if __name__ == "__main__":
             if idx != -1:
                 # This perm was found in the file.  We will store this index & process this entry
                 # remembering that this perm may occur multiple times in the file.
-                previous_index =  idx
+                previous_index = idx
 
                 idx = snippet.find('(effective')
                 if idx != -1:
@@ -87,21 +102,21 @@ if __name__ == "__main__":
                 string_date = ' '.join(_snippet_list)
                 string_date = string_date.replace('\n', '')
                 string_date = string_date.strip()
-                print(string_date)
-                print(str(perm))
+                # print(string_date)
+                # print(str(perm))
 
                 # Convert String ( ‘DD/MM/YY HH:MM:SS ‘) to datetime object
                 datetime_obj = datetime.strptime(string_date, '%m/%d/%y %H:%M:%S')
-                d = [{'date-object' : datetime_obj},
-                    {'clause': str(perm)},
-                    {'date-string': string_date}]
+                d = [datetime_obj, str(perm), string_date]
                 final_list.append(d)
+
             else:
                 not_eof = False
 
-    # sortedArray = sorted(
-    #     final_list,
-    #     key=lambda x: datetime.strptime(x['date-object'], '%m/%d/%y %H:%M:%S'), reverse=True
-    # )
+    sortedArray = sorted(
+        final_list,
+        key=lambda x: datetime.strptime(x[2], '%m/%d/%y %H:%M:%S'), reverse=False
+    )
 
-    # print (sortedArray)
+    create_excel_file(filename, sortedArray)
+    print("\nYour program is finished. \nHave a wonderful day.")
