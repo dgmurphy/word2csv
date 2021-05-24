@@ -14,7 +14,8 @@ def create_excel_file(filename, sortedArray):
         _writer.writerow(['Status', 'Effective Time'])
 
         for _cell in sortedArray:
-            _writer.writerow([_cell[1],_cell[2]])
+            _writer.writerow([_cell[1], _cell[2]])
+
 
 #
 # Make a list of all possible 2 combo keywords
@@ -102,8 +103,6 @@ if __name__ == "__main__":
                 string_date = ' '.join(_snippet_list)
                 string_date = string_date.replace('\n', '')
                 string_date = string_date.strip()
-                # print(string_date)
-                # print(str(perm))
 
                 # Convert String ( ‘DD/MM/YY HH:MM:SS ‘) to datetime object
                 datetime_obj = datetime.strptime(string_date, '%m/%d/%y %H:%M:%S')
@@ -119,4 +118,4 @@ if __name__ == "__main__":
     )
 
     create_excel_file(filename, sortedArray)
-    print("\nYour program is finished. \nHave a wonderful day.")
+    print("\nRun completed.")
