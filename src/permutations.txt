@@ -1,0 +1,35 @@
+
+#
+# Here is the list of permutations:
+#
+
+from Change Request to Suspended
+from Change Request to In Progress
+from Change Request to Acknowledged
+from Change Request to Dispatched
+from Change Request to Opened
+from Suspended to Change Request
+from Suspended to In Progress
+from Suspended to Acknowledged
+from Suspended to Dispatched
+from Suspended to Opened
+from In Progress to Change Request
+from In Progress to Suspended
+from In Progress to Acknowledged
+from In Progress to Dispatched
+from In Progress to Opened
+from Acknowledged to Change Request
+from Acknowledged to Suspended
+from Acknowledged to In Progress
+from Acknowledged to Dispatched
+from Acknowledged to Opened
+from Dispatched to Change Request
+from Dispatched to Suspended
+from Dispatched to In Progress
+from Dispatched to Acknowledged
+from Dispatched to Opened
+from Opened to Change Request
+from Opened to Suspended
+from Opened to In Progress
+from Opened to Acknowledged
+from Opened to Dispatched
