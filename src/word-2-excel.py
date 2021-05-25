@@ -6,10 +6,12 @@ from datetime import datetime
 #
 # Create a simple .csv file
 #
+
 def create_excel_file(filename, sortedArray):
     import csv
 
-    with open('./files/test.csv', mode='w') as _file:
+    filename = filename.replace('docx','csv')
+    with open(filename, mode='w') as _file:
         _writer = csv.writer(_file, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
         _writer.writerow(['Status', 'Effective Time'])
 
@@ -91,7 +93,9 @@ if __name__ == "__main__":
 
                 idx = snippet.find('(effective')
                 if idx != -1:
-                    snippet = snippet[0:idx]
+                    augment = len('(effective')
+                    paren = snippet.find(')')
+                    snippet = snippet[idx+augment:paren].strip()
 
                 if 'PM' in snippet:
                     snippet = snippet.replace(' PM', ':00 PM')
