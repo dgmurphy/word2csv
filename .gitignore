@@ -5,6 +5,7 @@ __pycache__/
 
 # do not check files in
 ./src/files/
+dist/files/
 
 #
 .iml
@@ -17,7 +18,8 @@ __pycache__/
 .Python
 build/
 develop-eggs/
-dist/
+install_env/
+*.spec
 downloads/
 eggs/
 .eggs/

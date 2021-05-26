@@ -1,6 +1,11 @@
-import docx2txt
-from convert_am_pm import convert24
+import csv
+from itertools import permutations
 from datetime import datetime
+import sys
+
+import docx2txt
+
+from convert_am_pm import convert24
 
 
 #
@@ -8,7 +13,6 @@ from datetime import datetime
 #
 
 def create_excel_file(filename, sortedArray):
-    import csv
 
     filename = filename.replace('docx','csv')
     with open(filename, mode='w') as _file:
@@ -25,7 +29,6 @@ def create_excel_file(filename, sortedArray):
 
 def make_permutations():
     results = []
-    from itertools import permutations
 
     keywords = ['Change Request', 'Suspended', 'In Progress', 'Acknowledged', 'Dispatched', 'Opened']
 
@@ -77,7 +80,7 @@ if __name__ == "__main__":
     # We could start at the index of "Updates" but we will not bother.
     # A clause can occur multiple times within the history of action.
 
-    filename = "./files/42-SEYM-200728-0002_2021-18-05_09-58-AM.docx"
+    filename = sys.argv[1]
     final_list = []
     date_list = []
 
