@@ -15,12 +15,12 @@ from convert_am_pm import convert24
 def create_excel_file(filename, sortedArray):
 
     filename = filename.replace('docx','csv')
-    with open(filename, mode='w') as _file:
+    with open(filename, mode='w', newline='') as _file:
         _writer = csv.writer(_file, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
-        _writer.writerow(['Status', 'Effective Time'])
+        _writer.writerow(['From Status', 'To Status', 'Effective Time'])
 
         for _cell in sortedArray:
-            _writer.writerow([_cell[1], _cell[2]])
+            _writer.writerow([_cell[1], _cell[2], _cell[3]])
 
 
 #
@@ -45,9 +45,8 @@ def make_permutations():
     return results
 
 
-def find_clause_index(_filename, substring, start):
+def find_clause_index(my_text, substring, start):
     nlf = '\n'
-    my_text = docx2txt.process(_filename)
     _idx = my_text.find(substring, start)
     result = ""
 
@@ -80,15 +79,25 @@ if __name__ == "__main__":
     # We could start at the index of "Updates" but we will not bother.
     # A clause can occur multiple times within the history of action.
 
+    if len(sys.argv) < 2:
+        print("ERROR: No input file specified.")
+        sys.exit()
+
     filename = sys.argv[1]
     final_list = []
     date_list = []
+
+    # Try getting the text
+    try:
+        my_text = docx2txt.process(filename)
+    except:
+        print("Error extracting text from document: " + filename)    
 
     for perm in perms:
         not_eof = True
         previous_index = 0
         while not_eof:
-            idx, snippet = find_clause_index(filename, perm, previous_index)
+            idx, snippet = find_clause_index(my_text, perm, previous_index)
             if idx != -1:
                 # This perm was found in the file.  We will store this index & process this entry
                 # remembering that this perm may occur multiple times in the file.
@@ -116,7 +125,17 @@ if __name__ == "__main__":
 
                 # Convert String ( ‘DD/MM/YY HH:MM:SS ‘) to datetime object
                 datetime_obj = datetime.strptime(string_date, '%m/%d/%y %H:%M:%S')
-                d = [datetime_obj, str(perm), string_date]
+
+                perm = perm.strip()
+
+                if "from " not in perm:
+                    frompart = "None"
+                    topart = perm[perm.index("to ") + 3:]
+                else:
+                    frompart = perm[5:perm.index(" to ")]
+                    topart = perm[perm.index(" to ") + 4:]
+                
+                d = [datetime_obj, str(frompart), str(topart), string_date]
                 final_list.append(d)
 
             else:
@@ -124,7 +143,7 @@ if __name__ == "__main__":
 
     sortedArray = sorted(
         final_list,
-        key=lambda x: datetime.strptime(x[2], '%m/%d/%y %H:%M:%S'), reverse=False
+        key=lambda x: datetime.strptime(x[3], '%m/%d/%y %H:%M:%S'), reverse=False
     )
 
     create_excel_file(filename, sortedArray)
