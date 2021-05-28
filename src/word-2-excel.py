@@ -30,7 +30,21 @@ def create_excel_file(filename, sortedArray):
 def make_permutations():
     results = []
 
-    keywords = ['Change Request', 'Suspended', 'In Progress', 'Acknowledged', 'Dispatched', 'Opened']
+    #keywords = ['Change Request', 'Suspended', 'In Progress', 'Acknowledged', 'Dispatched', 'Opened']
+    keywords = [
+                    'Opened',
+                    'Acknowledged',
+                    'Dispatched',
+                    'In Progress',
+                    'Change Request',
+                    'Suspended',
+                    'Repaired',
+                    'Completed',
+                    'Closed',
+                    'Rejected',
+                    'Cancelled',
+                    'Reopened'
+               ]
 
     # Get all permutations of length 2
     perm = permutations(keywords, 2)
