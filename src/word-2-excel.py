@@ -2,6 +2,7 @@ import csv
 from itertools import permutations
 from datetime import datetime
 import sys
+import re
 
 import docx2txt
 
@@ -75,13 +76,25 @@ def find_clause_index(my_text, substring, start):
         not_found = True
         while not_found:
             result = my_text[_idx:index_of_nextline]
-            if result.find("AM") != -1 or result.find("PM") != -1:
+            if (result.find("AM") != -1 or result.find("PM") != -1) and lineStartsWithADate(result):
                 not_found = False
             else:
                 _idx = index_of_nextline
                 index_of_nextline = my_text.find(nlf, _idx + 2)
 
     return _idx, result
+
+
+def lineStartsWithADate(line):
+
+    line = line.strip()
+
+    match = re.search("^(^\d\d\/\d\d\/\d\d \d\d:\d\d .M)",line)
+    if match is not None:
+        return True
+    else:
+        return False
+
 
 
 if __name__ == "__main__":
@@ -104,8 +117,10 @@ if __name__ == "__main__":
     # Try getting the text
     try:
         my_text = docx2txt.process(filename)
-    except:
-        print("Error extracting text from document: " + filename)    
+    except Exception as e:
+        print("Error extracting text from document: " + filename)   
+        print(e)
+        sys.exit() 
 
     for perm in perms:
         not_eof = True

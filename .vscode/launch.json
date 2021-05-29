@@ -10,7 +10,8 @@
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
-            "cwd": "${fileDirname}"
+            "cwd": "${fileDirname}",
+            "args": ["./files/42-ANDR-201019-0004_2021-28-05_09-03-AM.docx"]
         }
     ]
 }
