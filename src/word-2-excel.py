@@ -2,10 +2,12 @@ import csv
 from sys import argv, stdout
 import sys
 from time import sleep
-from zipfile import ZipFile
 import re
 import datetime # We avoid direct imports of classes with confusing names.
 from datetime import timedelta
+from zipfile import ZipFile
+from os.path import splitext
+from io import BytesIO
 
 import holidays
 import lxml.etree as ET
@@ -138,20 +140,19 @@ def calculate_delay(start, end, priority):
     return delay_hours
 
 
-def create_CSV(filename, details, updates_list):
+def write_single_ticket_CSV(filename, details, updates_list):
     """
-    Create a simple .csv file.
+    Create a CSV file with details and updates for a single ticket.
 
     """
 
-    filename = filename.replace('docx','csv')
     with open(filename, mode='w', newline='') as _file:
         _writer = csv.writer(_file, delimiter=',', quotechar='"',
                              quoting=csv.QUOTE_MINIMAL)
-        _writer.writerow(["Ticket No", details["ticket"]])
+        _writer.writerow(["Ticket No.", details["ticket"]])
         _writer.writerow(["Site", details["site"]])
         _writer.writerow(["Priority", details["priority"]])
-        _writer.writerow(["Report Date", details["report time"]])
+        _writer.writerow(["Report Time", details["report time"]])
         _writer.writerow([])
         _writer.writerow([])
         _writer.writerow(['Entered By', 'Entered On', 'From Status',
@@ -166,33 +167,52 @@ def create_CSV(filename, details, updates_list):
                               _cell["status hours"], _cell["update delay"]))
 
 
-if __name__ == "__main__":
+def write_details_CSV(filename, details_list):
+    """
+    Create a CSV file with details from all the tickets in a multi-ticket
+    ZIP file.
 
-    # Get the filename from the command line.
-    try:
-        filename = argv[1]
-    except IndexError:
-        print("ERROR: No input file specified.")
-        stdout.flush()
-        sleep(5)
-        sys.exit()
+    """
 
-    # Try getting the text.
-    try:
-        word = ZipFile(filename)
-    except Exception as e:
-        print("Error opening Word document: " + filename)
-        print(e)
-        stdout.flush()
-        sleep(5)
-        sys.exit()
+    with open(filename, mode='w', newline='') as _file:
+        _writer = csv.writer(_file, delimiter=',', quotechar='"',
+                             quoting=csv.QUOTE_MINIMAL)
+        _writer.writerow(['Ticket No.', 'Site', 'Priority', 'Report Date'])
+        for _cell in details_list:
+            _writer.writerow((_cell["ticket"], _cell["site"], _cell["priority"],
+                              _cell["report time"].strftime(TIME_FORMAT)))
+
+
+def write_updates_CSV(filename, all_updates):
+    """
+    Create a CSV file with updates from all the tickets in a multi-ticket
+    ZIP file.
+
+    """
+
+    with open(filename, mode='w', newline='') as _file:
+        _writer = csv.writer(_file, delimiter=',', quotechar='"',
+                             quoting=csv.QUOTE_MINIMAL)
+        _writer.writerow(['Ticket No.', 'Entered By', 'Entered On',
+                          'From Status', 'To Status', 'Status Note',
+                          'Effective Time', 'Status Hours', 'Update Delay'])
+        for _cell in all_updates:
+            _writer.writerow((_cell["ticket"], _cell["updater"],
+                              _cell["entry time"].strftime(TIME_FORMAT),
+                              _cell["from status"], _cell["to status"],
+                              _cell["status note"],
+                              _cell["effective time"].strftime(TIME_FORMAT),
+                              _cell["status hours"], _cell["update delay"]))
+
+
+def parse_ticket(word_file):
 
     # Read the document body and footer into XML Element objects, and
     # store the document and footer namespace maps.
-    document_root= ET.fromstring(word.read("word/document.xml"))
+    document_root= ET.fromstring(word_file.read("word/document.xml"))
     doc_ns = document_root.nsmap
     body = document_root.find("w:body", namespaces = doc_ns)
-    footer= ET.fromstring(word.read("word/footer1.xml"))
+    footer= ET.fromstring(word_file.read("word/footer1.xml"))
     footer_ns = footer.nsmap
 
     # We need to find the "Details" and "Updates" tables--we'll iterate
@@ -222,16 +242,16 @@ if __name__ == "__main__":
             # Get the ticket number. Just in case the ticket number gets
             # split over multiple text elements, we join all elements
             # found into a single string.
-            ticket_query = './/w:tr[descendant::*[contains(text(), "' + \
-                            TICKET_LABEL + '")]]'
+            ticket_query = './/w:tr[descendant::*[text() = "' + TICKET_LABEL + \
+                           '"]]'
             ticket_row = child.xpath(ticket_query, namespaces = doc_ns)
             ticket_cells = ticket_row[0].xpath(".//w:tc", namespaces = doc_ns)
             ticket_para = ticket_cells[1].xpath(".//w:t", namespaces = doc_ns)
             ticket = "".join([string.text for string in ticket_para])
 
             # Get the name of the contract--we'll use this to get the site.
-            contract_query = './/w:tr[descendant::*[contains(text(), "' + \
-                             CONTRACT_LABEL + '")]]'
+            contract_query = './/w:tr[descendant::*[text() = "' + \
+                             CONTRACT_LABEL + '"]]'
             contract_row = child.xpath(contract_query, namespaces = doc_ns)
             contract_cells = contract_row[0].xpath(".//w:tc",
                                                    namespaces = doc_ns)
@@ -249,8 +269,8 @@ if __name__ == "__main__":
                 raise ValueError("Unknown contract name format")
 
             # Get the ticket priority.
-            priority_query = './/w:tr[descendant::*[contains(text(), "' + \
-                             PRIORITY_LABEL + '")]]'
+            priority_query = './/w:tr[descendant::*[text() = "' + \
+                             PRIORITY_LABEL + '"]]'
             priority_row = child.xpath(priority_query, namespaces = doc_ns)
             priority_cells = priority_row[0].xpath(".//w:tc",
                                                    namespaces = doc_ns)
@@ -417,9 +437,9 @@ if __name__ == "__main__":
         # Replace "old_update" with the current update.
         old_update = update
 
-    # Find the report time in the footers. As with the other strings, we
-    # account for the possibility of the string being spread across
-    # multiple text elements.
+    # Find the report time in the footers, and add it to the details list.
+    # As with the other strings, we account for the possibility of the
+    # string being spread across multiple text elements.
     report_time_query = './/w:p[descendant::*[starts-with(text(), "' + \
                         REPORT_TIME_PREFIX + '")]]'
     report_time_para = footer.xpath(report_time_query,
@@ -430,13 +450,46 @@ if __name__ == "__main__":
                                         for string in report_time_para_text])
     report_time_string = report_time_entry_string.split(REPORT_TIME_PREFIX)[-1]
     report_time = datetime.datetime.strptime(report_time_string, TIME_FORMAT)
-
-    # Add the report time to the details dict, and add a line to
-    # "updates_list" that shows the delay between the completion time and
-    # the report time.
     details["report time"] = report_time
+
+    return details, updates_list
+
+
+# Get the filename from the command line. This could be either a DOCX file
+# (for a single ticket) or a a ZIP of a DOCX files (for multiple tickets).
+try:
+    filename = argv[1]
+except IndexError:
+    print("ERROR: No input file specified.")
+    stdout.flush()
+    sleep(5)
+    sys.exit()
+
+# Read the file--it's going to be in ZIP format either way.
+try:
+    input_file = ZipFile(filename)
+except Exception as e:
+    print("Error opening Word document: " + filename)
+    print(e)
+    stdout.flush()
+    sleep(5)
+    sys.exit()
+
+# To determine what type of file we're dealing with, we'll use the
+# file extension.
+file_ext = splitext(filename)[-1].lstrip(".").lower()
+
+# A single ticket will be a DOCX file.
+if file_ext == "docx":
+
+    # Get the updates data and details from the ticket.
+    details, updates_list = parse_ticket(input_file)
+
+    # Add a line to "updates_list" that shows the delay between the
+    # completion time and the report time.
+    report_time = details["report time"]
     report_delay = calculate_delay(updates_list[-1]["effective time"],
-                                   report_time, priority)
+                                   report_time, details["priority"])
     report_time_update = {"updater": "", "entry time": report_time,
                           "from status": updates_list[-1]["to status"],
                           "to status": "Report Date", "status note": "None",
@@ -444,9 +497,45 @@ if __name__ == "__main__":
                           "status hours": report_delay, "update delay": ""}
     updates_list.append(report_time_update)
 
-
-
     # Write the output CSV.
-    create_CSV(filename, details, updates_list)
+    report_filename = filename.replace('docx','csv')
+    write_single_ticket_CSV(report_filename, details, updates_list)
 
-    print("\nRun completed.\n")
+# A collection of tickets will be a ZIP file containing a directory with a
+# single DOCX file for each ticket.
+elif file_ext == "zip":
+
+    # Initialize lists of details and updates.
+    details_list = []
+    all_updates = []
+
+    # Iterate through the individual ticket files, getting the details and
+    # updates for each; we add the ticket number to each of the updates, as
+    # a key to cross-refernece the two lists.
+    #
+    # The "if" skips over directories (The list of directories and files in
+    # a "ZipFile" object is flat, not hierarchical.)
+    for zipped_file in input_file.filelist:
+        zipped_file_name = zipped_file.filename
+        if splitext(zipped_file_name)[-1].lstrip('.').lower() == "docx":
+            word_file = ZipFile(BytesIO(input_file.read(zipped_file_name)))
+            details, updates_list = parse_ticket(word_file)
+            details_list.append(details)
+            ticket = details["ticket"]
+            for update in updates_list:
+                update["ticket"] = ticket
+            all_updates.extend(updates_list)
+
+    # Write the details and updates CSV's.
+    details_filename = filename.replace('.zip','_details.csv')
+    updates_filename = filename.replace('.zip','_updates.csv')
+    write_details_CSV(details_filename, details_list)
+    write_updates_CSV(updates_filename, all_updates)
+
+else:
+    print('File type "' + file_ext + '" is not supported.')
+    stdout.flush()
+    sleep(5)
+    sys.exit()
+
+print("\nRun completed.\n")
