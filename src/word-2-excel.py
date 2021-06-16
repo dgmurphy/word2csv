@@ -1,34 +1,146 @@
 import csv
-from itertools import permutations
-import re
+from sys import argv, stdout
 import sys
+from time import sleep
 from zipfile import ZipFile
-import datetime
+import re
+import datetime # We avoid direct imports of classes with confusing names.
+from datetime import timedelta
 
+import holidays
 import lxml.etree as ET
 
 
-# Set constants.
-KEYWORDS = [
-            'Opened',
-            'Acknowledged',
-            'Dispatched',
-            'In Progress',
-            'Change Request',
-            'Suspended',
-            'Repaired',
-            'Completed',
-            'Closed',
-            'Rejected',
-            'Cancelled',
-            'Reopened'
-           ]
-time_format = "%m/%d/%y %I:%M %p"
+# Set constants. To make it easier to deploy the app, as a single file,
+# everything is hard-coded here, but to facilitate changes, everything is
+# a constant, set here at the beginning of the script.
+DETAILS_TITLE = "Details"
+TICKET_LABEL = "Case Number"
+CONTRACT_LABEL = "Contract"
+CONTRACT_PREFIXES = ["USAF -", "FSS-III CONUS -"]
+PRIORITY_LABEL = "Priority"
+UPDATES_TITLE = "Updates"
+STATUS_CHANGE_PHRASE = "changed the status of"
+UPDATER_SEP = " ("
+TO_SEP = " to "
+STATUS_NOTE_PATT_STRING = r" \((.+)\)" # regex for " (<status note>)"
+FROM_SEP = " from "
+EFFECTIVE_TIME_SEP = " (effective "
+EFFECTIVE_TIME_STRIP_CHARS = ")"
+REPORT_TIME_PREFIX = "Generated: "
+TIME_FORMAT = "%m/%d/%y %I:%M %p"
+MTRF_RULES = {"PL1: Catastrophic Failure": {"hours": 12, "duty day": False},
+              "PL1: Major Malfunction": {"hours": 12, "duty day": False},
+              "PL1: Partial Failure": {"hours": 24, "duty day": True},
+              "PL2: Catastrophic Failure": {"hours": 12, "duty day": False},
+              "PL2: Major Malfunction": {"hours": 12, "duty day": False},
+              "PL2: Partial Failure": {"hours": 24, "duty day": True},
+              "PL3: Catastrophic Failure": {"hours": 12, "duty day": False},
+              "PL3: Major Malfunction": {"hours": 12, "duty day": True},
+              "PL3: Partial Failure": {"hours": 24, "duty day": True},
+              "PL4: Catastrophic Failure": {"hours": 24, "duty day": False},
+              "PL4: Major Malfunction": {"hours": 24, "duty day": True},
+              "PL4: Partial Failure": {"hours": 24, "duty day": True}}
+DUTY_DAY = {"start": datetime.time(hour = 7), "end": datetime.time(hour = 16)}
+HOLIDAYS = holidays.UnitedStates()
+SUSPEND_STATUSES = ["Suspended"]
 
 
-def create_excel_file(filename, sorted_list):
+def calculate_delay(start, end, priority):
     """
-    Create a simple .csv file
+    Note that, at present, we don't use the "hours" values from
+    "MTRF_RULES"--we're simply calculating the times between status
+    changes, not comparing them to a metric.
+
+    """
+
+    # If we have to include weekends, holidays, and time outside the duty
+    # day in the delay between status changes, our calculation is simple.
+    if not MTRF_RULES[priority]["duty day"]:
+        delay = end - start
+
+    # If we don't have to count weekends, holidays, and time outside the
+    # duty day, things get much more complex.
+
+    else:
+
+        # First, we deal with the start date of the status period. If the
+        # start date was on a weekend or holiday, or the start time was
+        # after the end of the duty day, we don't record any time for
+        # this day.
+        if start.time() > DUTY_DAY["end"] or start.isoweekday() >= 6 or \
+          start in HOLIDAYS:
+            delay = timedelta(0)
+
+        # Otherwise, we record only time during the duty day.
+        else:
+
+            # If the period started before the duty day, reset "start"
+            # to the beginning of the duty day.
+            if start.time() < DUTY_DAY["start"]:
+                start = datetime.datetime.combine(start.date(),
+                                                  DUTY_DAY["start"])
+
+            # If the end of the status period is on the same day and occurs
+            # and before the end of the duty day, we subtract the start
+            # time from that time to get our delay. Otherwise, we use the
+            # end of the duty day to calculate time for the first day.
+            if end.date() == start.date() and end.time() < DUTY_DAY["end"]:
+                delay = end - start
+            else:
+                delay = \
+                    datetime.datetime.combine(start.date(), DUTY_DAY["end"]) - \
+                    start
+
+        # If the end of the status period was on a different day than the
+        # start, we need to add time for any additional day(s).
+        if end.date() > start.date():
+
+            # In many cases, we'll need to know the length of a duty day--
+            # this is slightly complex because we can't perform arithmetic
+            # on the "datetime.time" class.
+            arb_date = datetime.date(1, 1, 1)
+            duty_time = datetime.datetime.combine(arb_date, DUTY_DAY["end"]) - \
+                        datetime.datetime.combine(arb_date, DUTY_DAY["start"])
+
+            # We'll only add time for the end date if the end date was not
+            # on a weekend or holiday, and the end time was not before the
+            # beginning of the duty day.
+            if end.time() > DUTY_DAY["start"] and start.isoweekday() <= 5 and \
+              end not in HOLIDAYS:
+
+                # We add the difference between the end time and the
+                # beginning of the duty day, or, if the end occurs after
+                # the duty day, we add the length of the duty day.
+                if end.time() > DUTY_DAY["end"]:
+                    delay += duty_time
+                else:
+                    delay += end - datetime.datetime.combine(end.date(),
+                                                             DUTY_DAY["start"])
+
+            # If the end dates was at least two days after the start date
+            # (meaning there's at least one full day in between), we need
+            # to account for the days between the start and end updates.
+            if end.date() >= (start + timedelta(days = 2)).date():
+
+                # For each day that's not a weekend or holiday, wee add the
+                # entire duty day to the total.
+                current_full_day = start.date() + timedelta(days = 1)
+                while current_full_day < end.date():
+                    if current_full_day.isoweekday() <= 5 and \
+                      current_full_day not in HOLIDAYS:
+                        delay += duty_time
+                    current_full_day += timedelta(days = 1)
+
+    # Express the delay in hours.
+    delay_hours = delay.total_seconds() / 3600
+
+    return delay_hours
+
+
+def create_CSV(filename, details, updates_list):
+    """
+    Create a simple .csv file.
 
     """
 
@@ -36,141 +148,305 @@ def create_excel_file(filename, sorted_list):
     with open(filename, mode='w', newline='') as _file:
         _writer = csv.writer(_file, delimiter=',', quotechar='"',
                              quoting=csv.QUOTE_MINIMAL)
-        _writer.writerow(['From Status', 'To Status', 'Effective Time'])
-
-        for _cell in sorted_list:
-            _writer.writerow([_cell[0], _cell[1],
-                              _cell[2].strftime(time_format)])
-
-
-def make_permutations():
-    """
-    Make a list of all possible 2 combo keywords
-
-    """
-
-    results = []
-
-    # Get all permutations of length 2
-    perms = permutations(KEYWORDS, 2)
-
-    # Make the possible clauses
-    for _list in list(perms):
-        search_term = "from " + _list[0] + " to " + _list[1]
-        results.append(search_term)
-
-    # Hard code in a 'to Opened'.  This is the starting state.
-    results.append('to Opened')
-
-    return results
-
-
-def lineStartsWithADate(line):
-
-    line = line.strip()
-
-    match = re.search("^(^\d\d\/\d\d\/\d\d \d\d:\d\d .M)",line)
-    if match is not None:
-        return True
-    else:
-        return False
-
+        _writer.writerow(["Ticket No", details["ticket"]])
+        _writer.writerow(["Site", details["site"]])
+        _writer.writerow(["Priority", details["priority"]])
+        _writer.writerow(["Report Date", details["report time"]])
+        _writer.writerow([])
+        _writer.writerow([])
+        _writer.writerow(['Entered By', 'Entered On', 'From Status',
+                          'To Status', 'Status Note', 'Effective Time',
+                          'Status Hours', 'Update Delay'])
+        for _cell in updates_list:
+            _writer.writerow((_cell["updater"],
+                              _cell["entry time"].strftime(TIME_FORMAT),
+                              _cell["from status"], _cell["to status"],
+                              _cell["status note"],
+                              _cell["effective time"].strftime(TIME_FORMAT),
+                              _cell["status hours"], _cell["update delay"]))
 
 
 if __name__ == "__main__":
 
-
-    # Get the status change permutations.
-    perms = make_permutations()
-
-    # Attempt to find these substrings in our file.
-    # We are going to start at the beginning of the file.
-    # We could start at the index of "Updates" but we will not bother.
-    # A clause can occur multiple times within the history of action.
-
-    if len(sys.argv) < 2:
+    # Get the filename from the command line.
+    try:
+        filename = argv[1]
+    except IndexError:
         print("ERROR: No input file specified.")
+        stdout.flush()
+        sleep(5)
         sys.exit()
 
-    filename = sys.argv[1]
-    final_list = []
-    date_list = []
-
-    # Try getting the text
+    # Try getting the text.
     try:
         word = ZipFile(filename)
     except Exception as e:
         print("Error opening Word document: " + filename)
         print(e)
-        raise
+        stdout.flush()
+        sleep(5)
+        sys.exit()
 
-    # Read the document body into an XML Element object, and store the
-    # document namespace map.
+    # Read the document body and footer into XML Element objects, and
+    # store the document and footer namespace maps.
     document_root= ET.fromstring(word.read("word/document.xml"))
-    ns = document_root.nsmap
-    body = document_root.find("w:body", namespaces = ns)
+    doc_ns = document_root.nsmap
+    body = document_root.find("w:body", namespaces = doc_ns)
+    footer= ET.fromstring(word.read("word/footer1.xml"))
+    footer_ns = footer.nsmap
 
-    # Find the title for the "Updates" table, then search through the table
-    # itself (which will be the next child element) and iterate through its
-    # rows to locate status changes.
+    # We need to find the "Details" and "Updates" tables--we'll iterate
+    # through the children of the document body, and use the table titles
+    # to locate the tables we need--each table should be the next child
+    # after the child containing its title.
 
+    # Initialize the flags that tell us whether we've found the table
+    # titles.
+    details_found = False
     updates_found = False
+
+    # Initialize the updates list.
+    updates_list = []
+
+    # Compile a regex to detect parenthetical status notes.
+    status_note_patt = re.compile(STATUS_NOTE_PATT_STRING)
+
     for child in body:
 
-        # Check to see if the previous child was the "Updates" title. If it
-        # is, search the table for updates, and then break the loop.
+
+        # If the previous child was the "Details" title, pull the values out
+        # of the "Details" table.
+
+        if details_found:
+
+            # Get the ticket number. Just in case the ticket number gets
+            # split over multiple text elements, we join all elements
+            # found into a single string.
+            ticket_query = './/w:tr[descendant::*[contains(text(), "' + \
+                            TICKET_LABEL + '")]]'
+            ticket_row = child.xpath(ticket_query, namespaces = doc_ns)
+            ticket_cells = ticket_row[0].xpath(".//w:tc", namespaces = doc_ns)
+            ticket_para = ticket_cells[1].xpath(".//w:t", namespaces = doc_ns)
+            ticket = "".join([string.text for string in ticket_para])
+
+            # Get the name of the contract--we'll use this to get the site.
+            contract_query = './/w:tr[descendant::*[contains(text(), "' + \
+                             CONTRACT_LABEL + '")]]'
+            contract_row = child.xpath(contract_query, namespaces = doc_ns)
+            contract_cells = contract_row[0].xpath(".//w:tc",
+                                                   namespaces = doc_ns)
+            contract_para = contract_cells[1].xpath(".//w:t",
+                                                    namespaces = doc_ns)
+            contract_string = "".join([string.text for string in contract_para])
+
+            # Pull the site name out of the contract string.
+            site = None
+            for prefix in CONTRACT_PREFIXES:
+                if contract_string.startswith(prefix):
+                    site = contract_string.split(prefix)[-1]
+                    break
+            if not site:
+                raise ValueError("Unknown contract name format")
+
+            # Get the ticket priority.
+            priority_query = './/w:tr[descendant::*[contains(text(), "' + \
+                             PRIORITY_LABEL + '")]]'
+            priority_row = child.xpath(priority_query, namespaces = doc_ns)
+            priority_cells = priority_row[0].xpath(".//w:tc",
+                                                   namespaces = doc_ns)
+            priority_para = priority_cells[1].xpath(".//w:t",
+                                                    namespaces = doc_ns)
+            priority = "".join([string.text for string in priority_para])
+
+            # We'll add one more value to this dict later, when we extract
+            # the report date from the footer.
+            details = {"ticket": ticket, "site": site, "priority": priority}
+
+            # Finally, reset the "details_found" flag to false, so that we
+            # don't try to extract data from subsequent tables.
+            details_found = False
+
+        # Check for the "Details" title. Unless the "Details" title is
+        # found, this will be an empty list, which will evaluate as False
+        # in the Boolean test above.
+        details_found = child.xpath('.//w:t[text()="' + DETAILS_TITLE + '"]',
+                                    namespaces = doc_ns)
+
+        # If the previous child was the "Updates" title, search the table
+        # for updates, and then break the loop.
 
         if updates_found:
 
-            # Find all table cells that match each of the status change
-            # permutations.
+            # Find all of the update cells.
+            updates_query = './/w:tc[descendant::*[contains(text(), "' + \
+                            STATUS_CHANGE_PHRASE + '")]]'
+            updates = child.xpath(updates_query, namespaces = doc_ns)
 
-            for perm in perms:
+            for update in updates:
 
-                # Find all matching cells (if any).
-                query = './/w:tc[descendant::*[contains(text(), "' +  \
-                        perm + '")]]'
-                matches = child.xpath(query, namespaces = ns)
+                # Get all the text paragarphs in the update cell.
+                update_paras = update.findall("w:p", namespaces = doc_ns)
 
-                # If there are no matches--which will be true in the vast
-                # majority of cases--this will be an empty loop.
-                for match in matches:
+                # The status change is always the first paragraph in an
+                # update, and follows a set format. Given that the time
+                # paragraph is sometimes split across multiple text
+                # elements (see below), it's possible the same is true of
+                # the status change paragraph, and so we deal with this
+                # possibility.
+                status_para = update_paras[0].findall(".//w:t",
+                                                      namespaces = doc_ns)
+                status_para_string = "".join([string.text for string
+                                              in status_para])
 
-                    # The time is always the last paragraph in an update
-                    # cell. However, this one-line paragraph is sometimes
-                    # split across two (or possibly more) text elements.
-                    time_para = match[-1].findall(".//w:t", namespaces = ns)
-                    time_para_string = "".join([string.text for string
-                                                in time_para])
+                # Get the new status.
+                to_status_split = status_para_string.split(TO_SEP)
+                to_status = to_status_split[-1]
 
-                    # Pull out the effective time, discarding the time of
-                    # update entry, if any (there's usually an entry time,
-                    # but not always--hence we pull out the last sub-
-                    # string).
-                    time_string = \
-                        time_para_string.split("effective")[-1].strip(" )")
-                    time = datetime.datetime.strptime(time_string, time_format)
+                # In some cases, the new status (but not the old one)
+                # includes a parenthetical note. If this is present,
+                # split it out.
+                status_note_split = status_note_patt.split(to_status)
+                if len(status_note_split) > 1:
+                    to_status = status_note_split[0]
+                    status_note = status_note_split[1]
+                else:
+                    status_note = "None"
 
-                    if perm.startswith("to "):
-                        from_part = "None"
-                        to_part = perm.split("to ")[1]
-                    else:
-                        perm_split = perm.split(" to ")
-                        from_part = perm_split[0].split("from ")[1]
-                        to_part = perm_split[1]
+                # Get the old status, if any.
+                from_status_split = to_status_split[-2].split(FROM_SEP)
+                if len(from_status_split) > 1:
+                    from_status = from_status_split[-1]
+                else:
+                    from_status = "None"
 
-                    d = [from_part, to_part, time]
-                    final_list.append(d)
+                # Get the updater.
+                updater_split = from_status_split[0].split(UPDATER_SEP)
+                updater = updater_split[0]
+
+                # The time is always the last paragraph in an update
+                # cell. However, this one-line paragraph is sometimes
+                # split across two (or possibly more) text elements.
+                time_para = update_paras[-1].findall(".//w:t",
+                                                     namespaces = doc_ns)
+                time_string = "".join([string.text for string in time_para])
+
+                # Pull out the entry time.  in some cases, this is also
+                # the effective time (in which case the split returns a
+                # single-element list with nothing but the entry time),
+                # while in other cases, the two are listed separately.
+                time_string_split = time_string.split(EFFECTIVE_TIME_SEP)
+                entry_time_string = time_string_split[0]
+                entry_time = datetime.datetime.strptime(entry_time_string,
+                                                        TIME_FORMAT)
+
+                # Pull out the effective time. We pull out the last sub-
+                # (see the above comment) string, and strip a trailing
+                # parenthesis if it's present.
+                eff_time_string = \
+                    time_string_split[-1].rstrip(EFFECTIVE_TIME_STRIP_CHARS)
+                eff_time = datetime.datetime.strptime(eff_time_string,
+                                                      TIME_FORMAT)
+
+                # Add the extracted values to the updates list.
+                d = {"updater": updater, "entry time": entry_time,
+                     "from status": from_status, "to status": to_status,
+                     "status note": status_note, "effective time": eff_time}
+                updates_list.append(d)
 
             # If we've found and searched the "Updates" table, we're done.
             break
 
-        # Unless the "Updates" title is found, this will be an empty list,
-        # which will evaluate as False in the Boolean test at the beginning
-        # of the loop.
-        updates_found = child.xpath('.//w:t[text()="Updates"]', namespaces = ns)
+        # Check for the "Updates" title. Unless the "Updates" title is
+        # found, this will be an empty list, which will evaluate as False
+        # in the Boolean test above.
+        updates_found = child.xpath('.//w:t[text()="' + UPDATES_TITLE + '"]',
+                                    namespaces = doc_ns)
 
-    sorted_list = sorted(final_list, key = lambda x: x[2], reverse = False)
+    # Reverse the list--in most cases, this should give us the proper
+    # ordering.
+    updates_list.reverse()
 
-    create_excel_file(filename, sorted_list)
-    print("\nRun completed.")
+    # Just in case, sort the list by effective time--notably, this won't
+    # change the ordering of updates with the same effective time (which
+    # will prevent two updates entered in quick succession from being
+    # reversed). If effective times are correct, this should give the
+    # proper ordering almost 100% of the time, with the sole exception
+    # being status changes with the same time that are entered out of
+    # order.
+    updates_list.sort(key = lambda update: update["effective time"])
+
+    # Now, we need to calculate delays between updates, and between
+    # effective and report times.
+
+    old_update = None
+    for update in updates_list:
+
+        # If this is the first update, the delay between updates is defined
+        # as 0.
+        if not old_update:
+            update["status hours"] = 0
+
+        # Otherwise, calculate the delay--unless the old status indicated
+        # the clock was suspended.
+        #
+        # We check here to make sure the "to status" of the old update and
+        # the "from status" of the current update are identical--they
+        # should be, but if they aren't (see the above comment on the list
+        # sort), we record an error code in place of the delay.
+        #
+        # Since "updates_list" is actually a list of pointers to individual
+        # dicts, we can modify each of those individual dicts ("update") in
+        # turn without causing problems.
+        else:
+            if update["from status"] != old_update["to status"]:
+                update["status hours"] = "Status mismatch!"
+            elif update["from status"] in SUSPEND_STATUSES:
+                update["status hours"] = 0
+            else:
+                update["status hours"] = \
+                    calculate_delay(old_update["effective time"],
+                                    update["effective time"],
+                                    priority)
+
+        # Calculate the delay between the entry time and the effective
+        # time.
+        update["update delay"] = calculate_delay(update["effective time"],
+                                                 update["entry time"],
+                                                 priority)
+
+        # Replace "old_update" with the current update.
+        old_update = update
+
+    # Find the report time in the footers. As with the other strings, we
+    # account for the possibility of the string being spread across
+    # multiple text elements.
+    report_time_query = './/w:p[descendant::*[starts-with(text(), "' + \
+                        REPORT_TIME_PREFIX + '")]]'
+    report_time_para = footer.xpath(report_time_query,
+                                    namespaces = footer_ns)[0]
+    report_time_para_text = report_time_para.findall(".//w:t",
+                                                     namespaces = doc_ns)
+    report_time_entry_string = "".join([string.text
+                                        for string in report_time_para_text])
+    report_time_string = report_time_entry_string.split(REPORT_TIME_PREFIX)[-1]
+    report_time = datetime.datetime.strptime(report_time_string, TIME_FORMAT)
+
+    # Add the report time to the details dict, and add a line to
+    # "updates_list" that shows the delay between the completion time and
+    # the report time.
+    details["report time"] = report_time
+    report_delay = calculate_delay(updates_list[-1]["effective time"],
+                                   report_time, priority)
+    report_time_update = {"updater": "", "entry time": report_time,
+                          "from status": updates_list[-1]["to status"],
+                          "to status": "Report Date", "status note": "None",
+                          "effective time": report_time,
+                          "status hours": report_delay, "update delay": ""}
+    updates_list.append(report_time_update)
+
+
+
+    # Write the output CSV.
+    create_CSV(filename, details, updates_list)
+
+    print("\nRun completed.\n")
