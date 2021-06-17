@@ -83,16 +83,23 @@ def calculate_delay(start, end, priority):
                 start = datetime.datetime.combine(start.date(),
                                                   DUTY_DAY["start"])
 
-            # If the end of the status period is on the same day and occurs
-            # and before the end of the duty day, we subtract the start
-            # time from that time to get our delay. Otherwise, we use the
-            # end of the duty day to calculate time for the first day.
+            # If the end of the status period was on the same day and
+            # occured before the end of the duty day, we subtract the start
+            # time from that time to get our delay--unless both the end
+            # update and the start update occurred before the start of the
+            # duty day, in which case "end - start" calculation will
+            # produce a negative number, which we'll correct to 0.
             if end.date() == start.date() and end.time() < DUTY_DAY["end"]:
-                delay = end - start
+                delay = max(end - start, timedelta(0))
+
+            # If the end update occurred after the duty day, we use the
+            # end of the duty day to calculate time for the first day.
             else:
                 delay = \
                     datetime.datetime.combine(start.date(), DUTY_DAY["end"]) - \
                     start
+
+            # of the duty day
 
         # If the end of the status period was on a different day than the
         # start, we need to add time for any additional day(s).
@@ -111,16 +118,16 @@ def calculate_delay(start, end, priority):
             if end.time() > DUTY_DAY["start"] and start.isoweekday() <= 5 and \
               end not in HOLIDAYS:
 
-                # We add the difference between the end time and the
-                # beginning of the duty day, or, if the end occurs after
-                # the duty day, we add the length of the duty day.
+                # We add the difference between the beginning of the duty
+                # day and the end time, or, if the end occurs after the
+                # duty day, we add the length of the duty day.
                 if end.time() > DUTY_DAY["end"]:
                     delay += duty_time
                 else:
                     delay += end - datetime.datetime.combine(end.date(),
                                                              DUTY_DAY["start"])
 
-            # If the end dates was at least two days after the start date
+            # If the end date was at least two days after the start date
             # (meaning there's at least one full day in between), we need
             # to account for the days between the start and end updates.
             if end.date() >= (start + timedelta(days = 2)).date():
@@ -530,7 +537,7 @@ elif file_ext == "zip":
     details_filename = filename.replace('.zip','_details.csv')
     updates_filename = filename.replace('.zip','_updates.csv')
     write_details_CSV(details_filename, details_list)
-    write_updates_CSV(updates_filename, all_updates)
+    write_updates_CSV(updates_filename, all_updates )
 
 else:
     print('File type "' + file_ext + '" is not supported.')
